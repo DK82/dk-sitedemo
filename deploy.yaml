@@ -1,0 +1,220 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: cfn stack for deploying siteminder demo
+Parameters:
+    pSourceBucket:
+        Default: undefined
+        Type: String
+
+    
+
+Resources:
+
+    rFunctionRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+            RoleName: !Sub ${AWS::StackName}-rFunctionRole
+            Tags:
+                - Key: "lambda:createdBy"
+                  Value: SAM
+            ManagedPolicyArns:
+                - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+            Policies:
+                - PolicyName: dynamodb-actions
+                  PolicyDocument:
+                      Version: 2012-10-17
+                      Statement:
+                          - Action:
+                                - "dynamodb:PutItem"
+                                - "dynamodb:DeleteItem"
+                                - "dynamodb:Scan"
+                                - "dynamodb:Query"
+                                - "dynamodb:UpdateItem"
+                                - "dynamodb:GetItem"
+                            Resource: "*"
+                            Effect: Allow
+                - PolicyName: lambda-actions
+                  PolicyDocument:
+                      Version: 2012-10-17
+                      Statement:
+                          - Action:
+                                - "lambda:InvokeFunction"
+                            Resource: "*"
+                            Effect: Allow
+                
+            AssumeRolePolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                    - Action:
+                          - "sts:AssumeRole"
+                      Effect: Allow
+                      Principal:
+                          Service:
+                              - lambda.amazonaws.com
+
+    rFunctionApiMailgun:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            FunctionName: !Sub ${AWS::StackName}-apiMailgun
+            Code:
+                S3Bucket: !Ref pSourceBucket
+                S3Key: apiMailgun.zip
+            Tags:
+                - Value: SAM
+                  Key: "lambda:createdBy"
+            Environment:
+                Variables:
+                    API_DOMAIN: ''
+                    API_KEY: ''
+                    NODE_OPTIONS: '--no-deprecation'
+            Runtime: nodejs12.x
+            Timeout: 15
+            Handler: index.handler
+            Role: !GetAtt
+                - rFunctionRole
+                - Arn
+
+    rFunctionApiSendgrid:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            FunctionName: !Sub ${AWS::StackName}-apiSendgrid
+            Code:
+                S3Bucket: !Ref pSourceBucket
+                S3Key: apiSendgrid.zip
+            Tags:
+                - Value: SAM
+                  Key: "lambda:createdBy"
+            Environment:
+                Variables:
+                    API_URL: 'https://api.sendgrid.com/v3'
+                    API_KEY: ''
+            Runtime: nodejs12.x
+            Timeout: 15
+            Handler: index.handler
+            Role: !GetAtt
+                - rFunctionRole
+                - Arn
+
+    rFunctionMailHandler:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            FunctionName: !Sub ${AWS::StackName}-mailHandler
+            Code:
+                S3Bucket: !Ref pSourceBucket
+                S3Key: mailHandler.zip
+            Tags:
+                - Value: SAM
+                  Key: "lambda:createdBy"
+            Environment:
+                Variables:
+                    FUNC_SENDGRID: !Ref rFunctionApiSendgrid
+                    FUNC_MAILGUN: !Ref rFunctionApiMailgun
+            Runtime: nodejs12.x
+            Timeout: 15
+            Handler: index.handler
+            Role: !GetAtt
+                - rFunctionRole
+                - Arn
+
+
+    
+    rPermissionApiMailHandler:
+        Type: "AWS::Lambda::Permission"
+        Properties:
+            Action: "lambda:InvokeFunction"
+            Principal: apigateway.amazonaws.com
+            FunctionName: !Ref rFunctionMailHandler
+
+   
+
+    rApiStageProd:
+        Type: AWS::ApiGateway::Stage
+        Properties:
+            DeploymentId: !Ref rApiDeployment
+            RestApiId: !Ref rRestApi
+            StageName: prod
+            Description: !Sub stage prod for ${AWS::StackName} 
+          
+
+    rApiDeployment:
+        Type: AWS::ApiGateway::Deployment
+        Properties:
+            RestApiId: !Ref rRestApi
+            Description: !Sub deployment for ${AWS::StackName}
+
+
+    rRestApi:
+        Type: AWS::ApiGateway::RestApi
+        Properties:
+            Body:
+                info:
+                    version: "200721.1052"
+                    title: !Ref "AWS::StackName"
+                swagger: "2.0"
+                paths:
+                    /mail:
+                        post:
+                            x-amazon-apigateway-integration:
+                                httpMethod: POST
+                                type: aws_proxy
+                                uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${rFunctionMailHandler.Arn}/invocations
+                            responses: {}
+                        
+                    
+
+                
+
+    # tables =======
+    
+    # rTableAuditLog:
+    #     Type: "AWS::DynamoDB::Table"
+    #     Properties:
+    #         TableName: !Sub ${AWS::StackName}-AuditLog
+    #         AttributeDefinitions:
+    #             - AttributeName: _key
+    #               AttributeType: "S"
+    #             - AttributeName: _range
+    #               AttributeType: "S"
+    #         ProvisionedThroughput:
+    #             WriteCapacityUnits: 5
+    #             ReadCapacityUnits: 5
+    #         PointInTimeRecoverySpecification:
+    #             PointInTimeRecoveryEnabled: false
+    #         TimeToLiveSpecification:
+    #             Enabled: false
+    #             AttributeName: TTL
+    #         KeySchema:
+    #             - KeyType: HASH
+    #               AttributeName: _key
+    #             - KeyType: RANGE
+    #               AttributeName: _range
+    #         SSESpecification:
+    #             SSEEnabled: true
+
+    # rTableErrorLog:
+    #     Type: "AWS::DynamoDB::Table"
+    #     Properties:
+    #         TableName: !Sub ${AWS::StackName}-ErrorLog
+    #         AttributeDefinitions:
+    #             - AttributeName: _key
+    #               AttributeType: "S"
+    #             - AttributeName: _range
+    #               AttributeType: "S"
+    #         ProvisionedThroughput:
+    #             WriteCapacityUnits: 5
+    #             ReadCapacityUnits: 5
+    #         PointInTimeRecoverySpecification:
+    #             PointInTimeRecoveryEnabled: false
+    #         TimeToLiveSpecification:
+    #             Enabled: false
+    #             AttributeName: TTL
+    #         KeySchema:
+    #             - KeyType: HASH
+    #               AttributeName: _key
+    #             - KeyType: RANGE
+    #               AttributeName: _range
+    #         SSESpecification:
+    #             SSEEnabled: true
+
+    
+
+    
